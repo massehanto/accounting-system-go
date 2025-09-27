@@ -1,4 +1,4 @@
-# docker-compose.yml - PRODUCTION-READY VERSION
+# docker-compose.yml - PRODUCTION-READY VERSION WITH COMPANY SERVICE
 version: '3.8'
 
 services:
@@ -81,6 +81,37 @@ services:
           memory: 256M
           cpus: '0.5'
 
+  company-service:
+    build:
+      context: ./company-service
+      dockerfile: Dockerfile
+    environment:
+      - DB_HOST=postgres
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - DEFAULT_CURRENCY=IDR
+      - DEFAULT_TIMEZONE=Asia/Jakarta
+      - GO_ENV=production
+    networks:
+      - accounting-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8011/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
   account-service:
     build:
       context: ./account-service
@@ -94,6 +125,8 @@ services:
       - accounting-network
     depends_on:
       postgres:
+        condition: service_healthy
+      company-service:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -123,6 +156,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      account-service:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       replicas: 2
@@ -136,10 +171,13 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${JWT_SECRET}
+      - TAX_RATE_PPN=11.00
     networks:
       - accounting-network
     depends_on:
       postgres:
+        condition: service_healthy
+      company-service:
         condition: service_healthy
     restart: unless-stopped
 
@@ -157,6 +195,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      company-service:
+        condition: service_healthy
     restart: unless-stopped
 
   inventory-service:
@@ -173,6 +213,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      company-service:
+        condition: service_healthy
     restart: unless-stopped
 
   report-service:
@@ -184,6 +226,7 @@ services:
       - ACCOUNT_SERVICE_URL=http://account-service:8002
       - TRANSACTION_SERVICE_URL=http://transaction-service:8003
       - INVOICE_SERVICE_URL=http://invoice-service:8004
+      - COMPANY_SERVICE_URL=http://company-service:8011
     networks:
       - accounting-network
     restart: unless-stopped
@@ -197,6 +240,7 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${JWT_SECRET}
+      - TAX_RATE_PPN=11.00
     networks:
       - accounting-network
     depends_on:
@@ -211,6 +255,7 @@ services:
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - EXCHANGE_API_KEY=${EXCHANGE_API_KEY}
+      - DEFAULT_CURRENCY=IDR
     networks:
       - accounting-network
     restart: unless-stopped
@@ -236,6 +281,7 @@ services:
       - "8000:8000"
     environment:
       - USER_SERVICE_URL=http://user-service:8001
+      - COMPANY_SERVICE_URL=http://company-service:8011
       - ACCOUNT_SERVICE_URL=http://account-service:8002
       - TRANSACTION_SERVICE_URL=http://transaction-service:8003
       - INVOICE_SERVICE_URL=http://invoice-service:8004
@@ -250,6 +296,7 @@ services:
       - accounting-network
     depends_on:
       - user-service
+      - company-service
       - account-service
       - transaction-service
       - invoice-service

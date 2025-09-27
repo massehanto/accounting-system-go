@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Indonesian Accounting System API
   description: |
-    Professional accounting system API for Indonesian businesses.
+    Professional accounting system API for Indonesian businesses with comprehensive company management.
     
     ## Authentication
     All endpoints except `/auth/login` and `/auth/register` require JWT authentication.
@@ -14,9 +14,10 @@ info:
     - API tier: 1000 requests per minute
     
     ## Indonesian Business Rules
-    - All currency amounts are in Indonesian Rupiah (IDR)
+    - All currency amounts are in Indonesian Rupiah (IDR) with no decimal places
     - Tax calculations follow Indonesian regulations (PPN 11%)
     - Date formats follow DD/MM/YYYY convention
+    - Tax ID format follows Indonesian NPWP standard
     
   version: 1.0.0
   contact:
@@ -80,6 +81,155 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+
+  /companies:
+    get:
+      summary: Get companies
+      tags: [Companies]
+      parameters:
+        - in: query
+          name: active_only
+          schema:
+            type: boolean
+            default: true
+          description: Show only active companies
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: List of companies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Company'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+                    
+    post:
+      summary: Create company
+      tags: [Companies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyCreate'
+      responses:
+        '201':
+          description: Company created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Company'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /companies/{id}:
+    get:
+      summary: Get company by ID
+      tags: [Companies]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: Company ID
+      responses:
+        '200':
+          description: Company details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Company'
+        '404':
+          $ref: '#/components/responses/NotFound'
+          
+    put:
+      summary: Update company
+      tags: [Companies]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: Company ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyUpdate'
+      responses:
+        '200':
+          description: Company updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Company'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /companies/{id}/settings:
+    get:
+      summary: Get company settings
+      tags: [Companies]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: Company ID
+      responses:
+        '200':
+          description: Company settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/CompanySettings'
+                    
+    put:
+      summary: Update company settings
+      tags: [Companies]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: Company ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanySettings'
+      responses:
+        '200':
+          description: Settings updated successfully
 
   /accounts:
     get:
@@ -305,6 +455,104 @@ components:
           type: string
           format: email
           example: admin@contoh.co.id
+        business_type:
+          type: string
+          example: Technology Services
+        registration_date:
+          type: string
+          format: date
+        fiscal_year_end:
+          type: string
+          format: date
+          example: 12-31
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          
+    CompanyCreate:
+      type: object
+      required:
+        - name
+        - tax_id
+        - email
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          example: PT Contoh Indonesia
+        tax_id:
+          type: string
+          pattern: '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$'
+          example: 01.234.567.8-901.000
+        address:
+          type: string
+          example: Jakarta, Indonesia
+        phone:
+          type: string
+          example: +62-21-1234567
+        email:
+          type: string
+          format: email
+          example: admin@contoh.co.id
+        business_type:
+          type: string
+          example: Technology Services
+        registration_date:
+          type: string
+          format: date
+        fiscal_year_end:
+          type: string
+          format: date
+          example: 12-31
+          
+    CompanyUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+        address:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        business_type:
+          type: string
+        fiscal_year_end:
+          type: string
+          format: date
+          
+    CompanySettings:
+      type: object
+      properties:
+        default_currency:
+          type: string
+          example: IDR
+        default_timezone:
+          type: string
+          example: Asia/Jakarta
+        tax_rate_ppn:
+          type: number
+          format: double
+          example: 11.00
+        fiscal_year_start:
+          type: string
+          example: 01-01
+        reporting_language:
+          type: string
+          example: id-ID
+        business_license_type:
+          type: string
+          enum: [NIB, SIUP, TDP]
+        business_license_number:
+          type: string
           
     Account:
       type: object
@@ -333,8 +581,8 @@ components:
           type: boolean
           example: true
         balance:
-          type: number
-          format: double
+          type: integer
+          description: Balance in Indonesian Rupiah (no decimals)
           example: 1000000
         created_at:
           type: string
@@ -383,8 +631,8 @@ components:
         description:
           type: string
         total_amount:
-          type: number
-          format: double
+          type: integer
+          description: Total amount in Indonesian Rupiah (no decimals)
         status:
           type: string
           enum: [draft, posted, reversed]
@@ -412,12 +660,12 @@ components:
         description:
           type: string
         debit_amount:
-          type: number
-          format: double
+          type: integer
+          description: Debit amount in Indonesian Rupiah (no decimals)
           minimum: 0
         credit_amount:
-          type: number
-          format: double
+          type: integer
+          description: Credit amount in Indonesian Rupiah (no decimals)
           minimum: 0
         account:
           $ref: '#/components/schemas/AccountInfo'
@@ -465,12 +713,12 @@ components:
               description:
                 type: string
               debit_amount:
-                type: number
-                format: double
+                type: integer
+                description: Debit amount in Indonesian Rupiah (no decimals)
                 minimum: 0
               credit_amount:
-                type: number
-                format: double
+                type: integer
+                description: Credit amount in Indonesian Rupiah (no decimals)
                 minimum: 0
                 
     Pagination:
@@ -513,6 +761,10 @@ components:
         trace_id:
           type: string
           example: trace_789012
+        user_message:
+          type: string
+          description: Indonesian localized error message
+          example: Data tidak valid
           
   responses:
     BadRequest:
@@ -566,3 +818,17 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Authentication
+    description: User authentication and authorization
+  - name: Companies
+    description: Company management for Indonesian businesses
+  - name: Accounts
+    description: Chart of accounts management
+  - name: Transactions
+    description: Journal entries and transaction management
+  - name: Invoices
+    description: Invoice creation and management
+  - name: Reports
+    description: Financial reports and analytics

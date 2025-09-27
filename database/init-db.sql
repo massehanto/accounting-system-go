@@ -1,7 +1,8 @@
--- Enhanced Database Initialization Script
+-- Enhanced Database Initialization Script with Company Service Support
 
--- Create all databases
+-- Create all databases (including company_db)
 CREATE DATABASE user_db;
+CREATE DATABASE company_db;
 CREATE DATABASE account_db;
 CREATE DATABASE transaction_db;
 CREATE DATABASE invoice_db;
@@ -20,7 +21,8 @@ CREATE TABLE companies (
     phone VARCHAR(20),
     email VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_tax_id_format CHECK (tax_id ~ '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$')
 );
 
 CREATE TABLE users (
@@ -36,7 +38,7 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Audit log table
+-- Enhanced audit log table
 CREATE TABLE audit_log (
     id SERIAL PRIMARY KEY,
     table_name VARCHAR(50) NOT NULL,
@@ -45,7 +47,9 @@ CREATE TABLE audit_log (
     user_id INTEGER REFERENCES users(id),
     old_values JSONB,
     new_values JSONB,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ip_address INET,
+    user_agent TEXT
 );
 
 -- Insert sample data
@@ -57,6 +61,48 @@ INSERT INTO users (email, password_hash, name, role, company_id) VALUES
 ('admin@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Administrator', 'admin', 1),
 ('manager@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Manager', 'manager', 1),
 ('accountant@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Accountant', 'accountant', 1);
+
+-- Company Database Setup (NEW)
+\c company_db;
+
+CREATE TABLE companies (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    tax_id VARCHAR(50) UNIQUE NOT NULL,
+    address TEXT,
+    phone VARCHAR(20),
+    email VARCHAR(255),
+    business_type VARCHAR(100),
+    registration_date DATE,
+    fiscal_year_end DATE DEFAULT '12-31',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_tax_id_format CHECK (tax_id ~ '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$'),
+    CONSTRAINT check_email_format CHECK (email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+);
+
+-- Company settings for Indonesian compliance
+CREATE TABLE company_settings (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, setting_key)
+);
+
+-- Insert sample company data
+INSERT INTO companies (name, tax_id, address, phone, email, business_type) VALUES 
+('PT Contoh Indonesia', '01.234.567.8-901.000', 'Jakarta, Indonesia', '+62-21-1234567', 'admin@contoh.co.id', 'Technology Services');
+
+-- Insert Indonesian compliance settings
+INSERT INTO company_settings (company_id, setting_key, setting_value) VALUES 
+(1, 'default_currency', 'IDR'),
+(1, 'default_timezone', 'Asia/Jakarta'),
+(1, 'tax_rate_ppn', '11.00'),
+(1, 'fiscal_year_start', '01-01'),
+(1, 'reporting_language', 'id-ID');
 
 -- Account Database Setup
 \c account_db;
@@ -71,7 +117,8 @@ CREATE TABLE chart_of_accounts (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, account_code)
+    UNIQUE(company_id, account_code),
+    CONSTRAINT check_account_code_format CHECK (account_code ~ '^\d{4}$')
 );
 
 CREATE TABLE general_ledger (
@@ -80,13 +127,16 @@ CREATE TABLE general_ledger (
     account_id INTEGER REFERENCES chart_of_accounts(id),
     transaction_date DATE NOT NULL,
     description TEXT NOT NULL,
-    debit_amount DECIMAL(15,2) DEFAULT 0 CHECK (debit_amount >= 0),
-    credit_amount DECIMAL(15,2) DEFAULT 0 CHECK (credit_amount >= 0),
+    debit_amount DECIMAL(15,0) DEFAULT 0 CHECK (debit_amount >= 0),
+    credit_amount DECIMAL(15,0) DEFAULT 0 CHECK (credit_amount >= 0),
     reference_id VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT check_debit_or_credit CHECK (
         (debit_amount > 0 AND credit_amount = 0) OR 
         (debit_amount = 0 AND credit_amount > 0)
+    ),
+    CONSTRAINT check_idr_amounts CHECK (
+        debit_amount = ROUND(debit_amount) AND credit_amount = ROUND(credit_amount)
     )
 );
 
@@ -129,12 +179,15 @@ CREATE TABLE journal_entries (
     entry_number VARCHAR(50) NOT NULL,
     entry_date DATE NOT NULL,
     description TEXT NOT NULL,
-    total_amount DECIMAL(15,2) NOT NULL CHECK (total_amount >= 0),
-    status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'posted', 'cancelled')),
+    total_amount DECIMAL(15,0) NOT NULL CHECK (total_amount >= 0),
+    status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'posted', 'cancelled', 'reversed')),
     created_by INTEGER NOT NULL,
+    posted_by INTEGER,
+    posted_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, entry_number)
+    UNIQUE(company_id, entry_number),
+    CONSTRAINT check_idr_total_amount CHECK (total_amount = ROUND(total_amount))
 );
 
 CREATE TABLE journal_entry_lines (
@@ -142,12 +195,15 @@ CREATE TABLE journal_entry_lines (
     journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE,
     account_id INTEGER NOT NULL,
     description TEXT,
-    debit_amount DECIMAL(15,2) DEFAULT 0 CHECK (debit_amount >= 0),
-    credit_amount DECIMAL(15,2) DEFAULT 0 CHECK (credit_amount >= 0),
+    debit_amount DECIMAL(15,0) DEFAULT 0 CHECK (debit_amount >= 0),
+    credit_amount DECIMAL(15,0) DEFAULT 0 CHECK (credit_amount >= 0),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT check_debit_or_credit CHECK (
         (debit_amount > 0 AND credit_amount = 0) OR 
         (debit_amount = 0 AND credit_amount > 0)
+    ),
+    CONSTRAINT check_idr_line_amounts CHECK (
+        debit_amount = ROUND(debit_amount) AND credit_amount = ROUND(credit_amount)
     )
 );
 
@@ -167,7 +223,8 @@ CREATE TABLE customers (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, customer_code)
+    UNIQUE(company_id, customer_code),
+    CONSTRAINT check_customer_tax_id CHECK (tax_id IS NULL OR tax_id ~ '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$')
 );
 
 CREATE TABLE invoices (
@@ -177,13 +234,18 @@ CREATE TABLE invoices (
     invoice_number VARCHAR(50) NOT NULL,
     invoice_date DATE NOT NULL,
     due_date DATE NOT NULL,
-    subtotal DECIMAL(15,2) NOT NULL CHECK (subtotal >= 0),
-    tax_amount DECIMAL(15,2) DEFAULT 0 CHECK (tax_amount >= 0),
-    total_amount DECIMAL(15,2) NOT NULL CHECK (total_amount >= 0),
+    subtotal DECIMAL(15,0) NOT NULL CHECK (subtotal >= 0),
+    tax_amount DECIMAL(15,0) DEFAULT 0 CHECK (tax_amount >= 0),
+    total_amount DECIMAL(15,0) NOT NULL CHECK (total_amount >= 0),
     status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'paid', 'overdue', 'cancelled')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, invoice_number)
+    UNIQUE(company_id, invoice_number),
+    CONSTRAINT check_idr_invoice_amounts CHECK (
+        subtotal = ROUND(subtotal) AND 
+        tax_amount = ROUND(tax_amount) AND 
+        total_amount = ROUND(total_amount)
+    )
 );
 
 CREATE TABLE invoice_lines (
@@ -191,9 +253,12 @@ CREATE TABLE invoice_lines (
     invoice_id INTEGER REFERENCES invoices(id) ON DELETE CASCADE,
     product_name VARCHAR(255) NOT NULL,
     quantity DECIMAL(10,2) NOT NULL CHECK (quantity > 0),
-    unit_price DECIMAL(15,2) NOT NULL CHECK (unit_price >= 0),
-    line_total DECIMAL(15,2) NOT NULL CHECK (line_total >= 0),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    unit_price DECIMAL(15,0) NOT NULL CHECK (unit_price >= 0),
+    line_total DECIMAL(15,0) NOT NULL CHECK (line_total >= 0),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_idr_line_amounts CHECK (
+        unit_price = ROUND(unit_price) AND line_total = ROUND(line_total)
+    )
 );
 
 -- Insert sample customers
@@ -218,7 +283,8 @@ CREATE TABLE vendors (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, vendor_code)
+    UNIQUE(company_id, vendor_code),
+    CONSTRAINT check_vendor_tax_id CHECK (tax_id IS NULL OR tax_id ~ '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$')
 );
 
 CREATE TABLE purchase_orders (
@@ -228,13 +294,18 @@ CREATE TABLE purchase_orders (
     po_number VARCHAR(50) NOT NULL,
     order_date DATE NOT NULL,
     expected_date DATE,
-    subtotal DECIMAL(15,2) NOT NULL CHECK (subtotal >= 0),
-    tax_amount DECIMAL(15,2) DEFAULT 0 CHECK (tax_amount >= 0),
-    total_amount DECIMAL(15,2) NOT NULL CHECK (total_amount >= 0),
+    subtotal DECIMAL(15,0) NOT NULL CHECK (subtotal >= 0),
+    tax_amount DECIMAL(15,0) DEFAULT 0 CHECK (tax_amount >= 0),
+    total_amount DECIMAL(15,0) NOT NULL CHECK (total_amount >= 0),
     status VARCHAR(20) DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'confirmed', 'delivered', 'cancelled')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, po_number)
+    UNIQUE(company_id, po_number),
+    CONSTRAINT check_idr_po_amounts CHECK (
+        subtotal = ROUND(subtotal) AND 
+        tax_amount = ROUND(tax_amount) AND 
+        total_amount = ROUND(total_amount)
+    )
 );
 
 -- Insert sample vendors
@@ -252,14 +323,17 @@ CREATE TABLE products (
     product_code VARCHAR(50) NOT NULL,
     product_name VARCHAR(255) NOT NULL,
     description TEXT,
-    unit_price DECIMAL(15,2) NOT NULL CHECK (unit_price >= 0),
-    cost_price DECIMAL(15,2) NOT NULL CHECK (cost_price >= 0),
+    unit_price DECIMAL(15,0) NOT NULL CHECK (unit_price >= 0),
+    cost_price DECIMAL(15,0) NOT NULL CHECK (cost_price >= 0),
     quantity_on_hand INTEGER DEFAULT 0 CHECK (quantity_on_hand >= 0),
     minimum_stock INTEGER DEFAULT 0 CHECK (minimum_stock >= 0),
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, product_code)
+    UNIQUE(company_id, product_code),
+    CONSTRAINT check_idr_product_amounts CHECK (
+        unit_price = ROUND(unit_price) AND cost_price = ROUND(cost_price)
+    )
 );
 
 CREATE TABLE stock_movements (
@@ -268,12 +342,13 @@ CREATE TABLE stock_movements (
     product_id INTEGER REFERENCES products(id),
     movement_type VARCHAR(20) NOT NULL CHECK (movement_type IN ('IN', 'OUT', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'TRANSFER')),
     quantity INTEGER NOT NULL,
-    unit_cost DECIMAL(15,2),
+    unit_cost DECIMAL(15,0),
     reference_number VARCHAR(100),
     movement_date DATE NOT NULL,
     notes TEXT,
     created_by INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_idr_unit_cost CHECK (unit_cost IS NULL OR unit_cost = ROUND(unit_cost))
 );
 
 -- Insert sample products
@@ -303,9 +378,12 @@ CREATE TABLE tax_transactions (
     transaction_id INTEGER NOT NULL,
     transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('INVOICE', 'PURCHASE', 'JOURNAL')),
     tax_rate_id INTEGER REFERENCES tax_rates(id),
-    tax_base DECIMAL(15,2) NOT NULL CHECK (tax_base >= 0),
-    tax_amount DECIMAL(15,2) NOT NULL CHECK (tax_amount >= 0),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    tax_base DECIMAL(15,0) NOT NULL CHECK (tax_base >= 0),
+    tax_amount DECIMAL(15,0) NOT NULL CHECK (tax_amount >= 0),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT check_idr_tax_amounts CHECK (
+        tax_base = ROUND(tax_base) AND tax_amount = ROUND(tax_amount)
+    )
 );
 
 -- Insert Indonesian tax rates
@@ -316,12 +394,17 @@ INSERT INTO tax_rates (company_id, tax_name, tax_rate, is_active) VALUES
 (1, 'PPh 4(2) Final', 0.50, true),
 (1, 'PPh Badan', 25.00, true);
 
--- CREATE INDEXES FOR PERFORMANCE
+-- CREATE ENHANCED INDEXES FOR PERFORMANCE
 \c user_db;
 CREATE INDEX idx_users_company_email ON users(company_id, email);
 CREATE INDEX idx_users_active ON users(is_active) WHERE is_active = true;
 CREATE INDEX idx_audit_log_table_record ON audit_log(table_name, record_id);
 CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
+CREATE INDEX idx_companies_tax_id ON companies(tax_id);
+
+\c company_db;
+CREATE INDEX idx_companies_tax_id ON companies(tax_id);
+CREATE INDEX idx_company_settings_key ON company_settings(company_id, setting_key);
 
 \c account_db;
 CREATE INDEX idx_accounts_company_type ON chart_of_accounts(company_id, account_type);
@@ -366,16 +449,39 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Create audit logging function
+CREATE OR REPLACE FUNCTION audit_log_changes()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO audit_log (table_name, record_id, operation, old_values, new_values)
+    VALUES (
+        TG_TABLE_NAME,
+        COALESCE(NEW.id, OLD.id),
+        TG_OP,
+        CASE WHEN TG_OP = 'DELETE' THEN row_to_json(OLD) ELSE NULL END,
+        CASE WHEN TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN row_to_json(NEW) ELSE NULL END
+    );
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ language 'plpgsql';
+
 -- Apply triggers to tables with updated_at columns
 \c user_db;
 CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER audit_companies AFTER INSERT OR UPDATE OR DELETE ON companies FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
+CREATE TRIGGER audit_users AFTER INSERT OR UPDATE OR DELETE ON users FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
+
+\c company_db;
+CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_company_settings_updated_at BEFORE UPDATE ON company_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c account_db;
 CREATE TRIGGER update_accounts_updated_at BEFORE UPDATE ON chart_of_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c transaction_db;
 CREATE TRIGGER update_journal_entries_updated_at BEFORE UPDATE ON journal_entries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER audit_journal_entries AFTER INSERT OR UPDATE OR DELETE ON journal_entries FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
 
 \c invoice_db;
 CREATE TRIGGER update_customers_updated_at BEFORE UPDATE ON customers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
