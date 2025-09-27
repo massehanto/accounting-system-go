@@ -1,0 +1,17 @@
+go 1.21.1
+
+use (
+	./account-service
+	./api-gateway
+	./company-service
+	./currency-service
+	./inventory-service
+	./invoice-service
+	./notification-service
+	./report-service
+	./shared
+	./tax-service
+	./transaction-service
+	./user-service
+	./vendor-service
+)

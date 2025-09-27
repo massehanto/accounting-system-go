@@ -1,0 +1,568 @@
+openapi: 3.0.3
+info:
+  title: Indonesian Accounting System API
+  description: |
+    Professional accounting system API for Indonesian businesses.
+    
+    ## Authentication
+    All endpoints except `/auth/login` and `/auth/register` require JWT authentication.
+    Include the token in the Authorization header: `Bearer YOUR_TOKEN`
+    
+    ## Rate Limiting
+    - Basic tier: 60 requests per minute
+    - Premium tier: 300 requests per minute
+    - API tier: 1000 requests per minute
+    
+    ## Indonesian Business Rules
+    - All currency amounts are in Indonesian Rupiah (IDR)
+    - Tax calculations follow Indonesian regulations (PPN 11%)
+    - Date formats follow DD/MM/YYYY convention
+    
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: api@accounting-system.co.id
+  license:
+    name: Proprietary
+    
+servers:
+  - url: http://localhost:8000/api
+    description: Development server
+  - url: https://api.accounting-system.co.id
+    description: Production server
+    
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      summary: User login
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@contoh.co.id
+                password:
+                  type: string
+                  format: password
+                  example: SecurePassword123!
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                      user:
+                        $ref: '#/components/schemas/User'
+                      company:
+                        $ref: '#/components/schemas/Company'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /accounts:
+    get:
+      summary: Get chart of accounts
+      tags: [Accounts]
+      parameters:
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [Asset, Liability, Equity, Revenue, Expense]
+          description: Filter by account type
+        - in: query
+          name: active_only
+          schema:
+            type: boolean
+            default: false
+          description: Show only active accounts
+        - in: query
+          name: include_balance
+          schema:
+            type: boolean
+            default: false
+          description: Include current balance
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+                    
+    post:
+      summary: Create new account
+      tags: [Accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /transactions:
+    get:
+      summary: Get journal entries
+      tags: [Transactions]
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [draft, posted, reversed]
+          description: Filter by status
+        - in: query
+          name: start_date
+          schema:
+            type: string
+            format: date
+          description: Start date (YYYY-MM-DD)
+        - in: query
+          name: end_date
+          schema:
+            type: string
+            format: date
+          description: End date (YYYY-MM-DD)
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+                    
+    post:
+      summary: Create journal entry
+      tags: [Transactions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionCreate'
+      responses:
+        '201':
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /transactions/{id}/post:
+    post:
+      summary: Post journal entry
+      tags: [Transactions]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: Transaction ID
+      responses:
+        '200':
+          description: Transaction posted
+        '400':
+          description: Cannot post transaction
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      
+  parameters:
+    PageParam:
+      in: query
+      name: page
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      description: Page number
+      
+    PageSizeParam:
+      in: query
+      name: page_size
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      description: Items per page
+      
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: admin@contoh.co.id
+        name:
+          type: string
+          example: Administrator
+        role:
+          type: string
+          enum: [admin, manager, accountant, user]
+          example: admin
+        company_id:
+          type: integer
+          example: 1
+        is_active:
+          type: boolean
+          example: true
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+          
+    Company:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: PT Contoh Indonesia
+        tax_id:
+          type: string
+          pattern: '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$'
+          example: 01.234.567.8-901.000
+        address:
+          type: string
+          example: Jakarta, Indonesia
+        phone:
+          type: string
+          example: +62-21-1234567
+        email:
+          type: string
+          format: email
+          example: admin@contoh.co.id
+          
+    Account:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        company_id:
+          type: integer
+          example: 1
+        account_code:
+          type: string
+          pattern: '^\d{4}$'
+          example: "1000"
+        account_name:
+          type: string
+          example: Kas
+        account_type:
+          type: string
+          enum: [Asset, Liability, Equity, Revenue, Expense]
+          example: Asset
+        parent_id:
+          type: integer
+          nullable: true
+        is_active:
+          type: boolean
+          example: true
+        balance:
+          type: number
+          format: double
+          example: 1000000
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          
+    AccountCreate:
+      type: object
+      required:
+        - account_code
+        - account_name
+        - account_type
+      properties:
+        account_code:
+          type: string
+          pattern: '^\d{4}$'
+          example: "1000"
+        account_name:
+          type: string
+          minLength: 2
+          maxLength: 255
+          example: Kas
+        account_type:
+          type: string
+          enum: [Asset, Liability, Equity, Revenue, Expense]
+          example: Asset
+        parent_id:
+          type: integer
+          nullable: true
+          
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: integer
+        company_id:
+          type: integer
+        entry_number:
+          type: string
+          example: JE20240001
+        entry_date:
+          type: string
+          format: date
+        description:
+          type: string
+        total_amount:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [draft, posted, reversed]
+        created_by:
+          type: integer
+        posted_by:
+          type: integer
+          nullable: true
+        posted_at:
+          type: string
+          format: date-time
+          nullable: true
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransactionLine'
+            
+    TransactionLine:
+      type: object
+      properties:
+        id:
+          type: integer
+        account_id:
+          type: integer
+        description:
+          type: string
+        debit_amount:
+          type: number
+          format: double
+          minimum: 0
+        credit_amount:
+          type: number
+          format: double
+          minimum: 0
+        account:
+          $ref: '#/components/schemas/AccountInfo'
+          
+    AccountInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        account_code:
+          type: string
+        account_name:
+          type: string
+        account_type:
+          type: string
+          
+    TransactionCreate:
+      type: object
+      required:
+        - entry_number
+        - entry_date
+        - description
+        - lines
+      properties:
+        entry_number:
+          type: string
+          example: JE20240001
+        entry_date:
+          type: string
+          format: date
+        description:
+          type: string
+          minLength: 5
+          maxLength: 500
+        lines:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required:
+              - account_id
+            properties:
+              account_id:
+                type: integer
+              description:
+                type: string
+              debit_amount:
+                type: number
+                format: double
+                minimum: 0
+              credit_amount:
+                type: number
+                format: double
+                minimum: 0
+                
+    Pagination:
+      type: object
+      properties:
+        total_count:
+          type: integer
+          example: 100
+        page:
+          type: integer
+          example: 1
+        page_size:
+          type: integer
+          example: 20
+        has_next:
+          type: boolean
+          example: true
+        has_prev:
+          type: boolean
+          example: false
+          
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: An error occurred
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        details:
+          type: object
+          additionalProperties: true
+        timestamp:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+          example: req_123456
+        trace_id:
+          type: string
+          example: trace_789012
+          
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    Conflict:
+      description: Resource conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            
+    TooManyRequests:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until next request allowed
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: Request limit per window
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+          description: Remaining requests in window
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+          description: Unix timestamp when window resets
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

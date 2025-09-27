@@ -1,0 +1,69 @@
+{
+  "short_name": "Accounting",
+  "name": "Indonesian Accounting System",
+  "description": "Professional accounting system for Indonesian businesses",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#1976d2",
+  "background_color": "#ffffff",
+  "orientation": "any",
+  "categories": ["business", "finance", "productivity"],
+  "shortcuts": [
+    {
+      "name": "New Invoice",
+      "short_name": "Invoice",
+      "description": "Create a new invoice",
+      "url": "/invoices/new",
+      "icons": [{ "src": "/icons/invoice.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "New Transaction",
+      "short_name": "Transaction",
+      "description": "Record a new transaction",
+      "url": "/transactions/new",
+      "icons": [{ "src": "/icons/transaction.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Reports",
+      "short_name": "Reports",
+      "description": "View financial reports",
+      "url": "/reports",
+      "icons": [{ "src": "/icons/reports.png", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/dashboard.png",
+      "type": "image/png",
+      "sizes": "1280x720",
+      "label": "Dashboard overview"
+    },
+    {
+      "src": "/screenshots/mobile.png",
+      "type": "image/png",
+      "sizes": "750x1334",
+      "label": "Mobile view"
+    }
+  ],
+  "prefer_related_applications": false
+}
