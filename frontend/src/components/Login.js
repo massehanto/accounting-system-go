@@ -1,19 +1,15 @@
-// frontend/src/components/Login.js (Enhanced)
+// frontend/src/components/Login.js - SIMPLIFIED VERSION
 import React, { useState } from 'react';
 import {
-  Container, Paper, TextField, Button, Typography, Box,
-  Alert, InputAdornment, IconButton, CircularProgress
+  Container, Paper, TextField, Button, Typography, Box, Alert
 } from '@mui/material';
-import { Visibility, VisibilityOff, AccountBalance, Login as LoginIcon } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
-import { useNotification } from '../contexts/NotificationContext';
 import { useFormValidation, validationRules } from '../utils/formValidation';
 
 const Login = () => {
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const { login } = useAuth();
-  const { showSuccess } = useNotification();
 
   const {
     values, errors, touched, handleChange, handleBlur, validateAll
@@ -30,38 +26,33 @@ const Login = () => {
     if (!validateAll()) return;
 
     setLoading(true);
-    const result = await login(values);
+    setError('');
     
-    if (result.success) {
-      showSuccess('Login successful');
+    try {
+      await login(values);
+    } catch (err) {
+      setError(err.message || 'Login failed');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
     <Container component="main" maxWidth="xs">
       <Box sx={{ marginTop: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <Paper elevation={3} sx={{ padding: 4, width: '100%' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
-            <AccountBalance sx={{ mr: 1, fontSize: 40, color: 'primary.main' }} />
-            <Typography variant="h4" component="h1">
-              Sistem Akuntansi
-            </Typography>
-          </Box>
-          
-          <Typography variant="h6" align="center" color="textSecondary" gutterBottom>
-            Login to your account
+          <Typography variant="h4" component="h1" align="center" gutterBottom>
+            Sistem Akuntansi
           </Typography>
           
-          <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2 }}>
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          
+          <Box component="form" onSubmit={handleSubmit}>
             <TextField
               required
               fullWidth
-              id="email"
-              label="Email Address"
-              name="email"
-              autoComplete="email"
-              autoFocus
+              label="Email"
+              type="email"
               value={values.email}
               onChange={(e) => handleChange('email', e.target.value)}
               onBlur={() => handleBlur('email')}
@@ -74,39 +65,22 @@ const Login = () => {
             <TextField
               required
               fullWidth
-              name="password"
               label="Password"
-              type={showPassword ? 'text' : 'password'}
-              id="password"
-              autoComplete="current-password"
+              type="password"
               value={values.password}
               onChange={(e) => handleChange('password', e.target.value)}
               onBlur={() => handleBlur('password')}
               error={touched.password && !!errors.password}
               helperText={touched.password && errors.password}
               disabled={loading}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      onClick={() => setShowPassword(!showPassword)}
-                      edge="end"
-                      disabled={loading}
-                    >
-                      {showPassword ? <VisibilityOff /> : <Visibility />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
+              sx={{ mb: 3 }}
             />
             
             <Button
               type="submit"
               fullWidth
               variant="contained"
-              sx={{ mt: 3, mb: 2 }}
               disabled={loading}
-              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <LoginIcon />}
             >
               {loading ? 'Signing In...' : 'Sign In'}
             </Button>
