@@ -1,4 +1,4 @@
-// api-gateway/main.go - ENHANCED VERSION WITH COMPANY SERVICE
+// api-gateway/main.go - FIXED COMPANY SERVICE ROUTING
 package main
 
 import (
@@ -328,10 +328,11 @@ func setupRoutes(r *mux.Router, registry *ServiceRegistry, cfg *config.Config) {
     
     authMiddleware := middleware.NewAuthMiddleware(cfg.JWT.Secret)
     
-    // Protected routes with comprehensive middleware - UPDATED WITH COMPANY SERVICE
+    // Protected routes with comprehensive middleware - CORRECTED ROUTING
     protectedRoutes := map[string]string{
         "/api/users":           "user",
-        "/api/companies":       "company",        // Fixed: Added company service routing
+        "/api/profile":         "user",
+        "/api/companies":       "company",        // FIXED: Now properly routed to company service
         "/api/accounts":        "account",
         "/api/ledger":          "account",
         "/api/transactions":    "transaction",

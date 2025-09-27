@@ -1,4 +1,4 @@
-// user-service/main.go
+// user-service/main.go - REFACTORED FOR PROPER SERVICE SEPARATION
 package main
 
 import (
@@ -8,6 +8,9 @@ import (
     "net/http"
     "strings"
     "time"
+    "bytes"
+    "fmt"
+    "os"
     
     "github.com/gorilla/mux"
     _ "github.com/lib/pq"
@@ -24,7 +27,9 @@ import (
 
 type UserService struct {
     *service.BaseService
-    config *config.Config
+    config            *config.Config
+    companyServiceURL string
+    client            *http.Client
 }
 
 type User struct {
@@ -66,8 +71,10 @@ func main() {
     defer db.Close()
     
     userService := &UserService{
-        BaseService: &service.BaseService{DB: db},
-        config:      cfg,
+        BaseService:       &service.BaseService{DB: db},
+        config:           cfg,
+        companyServiceURL: getEnv("COMPANY_SERVICE_URL", "http://localhost:8011"),
+        client:           &http.Client{Timeout: 30 * time.Second},
     }
     
     r := mux.NewRouter()
@@ -86,8 +93,6 @@ func main() {
     // Protected endpoints
     authMiddleware := middleware.APIMiddleware(cfg.JWT.Secret)
     r.Handle("/users", authMiddleware(userService.getUsersHandler)).Methods("GET")
-    r.Handle("/companies", authMiddleware(userService.getCompaniesHandler)).Methods("GET")
-    r.Handle("/companies", authMiddleware(userService.createCompanyHandler)).Methods("POST")
     r.Handle("/auth/refresh", authMiddleware(userService.refreshTokenHandler)).Methods("POST")
     r.Handle("/profile", authMiddleware(userService.getProfileHandler)).Methods("GET")
     r.Handle("/profile", authMiddleware(userService.updateProfileHandler)).Methods("PUT")
@@ -114,19 +119,15 @@ func (s *UserService) loginHandler(w http.ResponseWriter, r *http.Request) {
 
     err := s.ExecuteWithTimeout(10*time.Second, func(ctx context.Context) error {
         var user User
-        var company Company
         var passwordHash string
         
-        query := `SELECT u.id, u.email, u.password_hash, u.name, u.role, u.company_id, u.is_active, u.created_at,
-                         c.name, c.tax_id, c.address, c.phone, c.email
-                  FROM users u
-                  JOIN companies c ON u.company_id = c.id
-                  WHERE LOWER(u.email) = LOWER($1) AND u.is_active = true`
+        // Only get user data from user service
+        query := `SELECT id, email, password_hash, name, role, company_id, is_active, created_at
+                  FROM users WHERE LOWER(email) = LOWER($1) AND is_active = true`
         
         err := s.DB.QueryRowContext(ctx, query, req.Email).Scan(
             &user.ID, &user.Email, &passwordHash, &user.Name, 
-            &user.Role, &user.CompanyID, &user.IsActive, &user.CreatedAt,
-            &company.Name, &company.TaxID, &company.Address, &company.Phone, &company.Email)
+            &user.Role, &user.CompanyID, &user.IsActive, &user.CreatedAt)
         
         if err == sql.ErrNoRows {
             s.RespondWithError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid email or password")
@@ -139,6 +140,13 @@ func (s *UserService) loginHandler(w http.ResponseWriter, r *http.Request) {
 
         if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
             s.RespondWithError(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Invalid email or password")
+            return nil
+        }
+
+        // Fetch company data from company service
+        company, err := s.fetchCompanyData(r.Context(), user.CompanyID, r.Header.Get("Authorization"))
+        if err != nil {
+            s.RespondWithError(w, http.StatusInternalServerError, "COMPANY_ERROR", "Error fetching company data")
             return nil
         }
 
@@ -155,11 +163,10 @@ func (s *UserService) loginHandler(w http.ResponseWriter, r *http.Request) {
             return nil
         }
 
-        company.ID = user.CompanyID
         response := LoginResponse{
             Token:   token,
             User:    user,
-            Company: company,
+            Company: *company,
         }
 
         s.RespondWithJSON(w, http.StatusOK, response)
@@ -169,6 +176,38 @@ func (s *UserService) loginHandler(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         s.RespondWithError(w, http.StatusInternalServerError, "LOGIN_ERROR", "Login process failed")
     }
+}
+
+// Fetch company data from company service
+func (s *UserService) fetchCompanyData(ctx context.Context, companyID int, authHeader string) (*Company, error) {
+    req, err := http.NewRequestWithContext(ctx, "GET", 
+        fmt.Sprintf("%s/companies/%d", s.companyServiceURL, companyID), nil)
+    if err != nil {
+        return nil, err
+    }
+    
+    req.Header.Set("Authorization", authHeader)
+    req.Header.Set("Content-Type", "application/json")
+    
+    resp, err := s.client.Do(req)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("company service error: %d", resp.StatusCode)
+    }
+    
+    var response struct {
+        Data Company `json:"data"`
+    }
+    
+    if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+        return nil, err
+    }
+    
+    return &response.Data, nil
 }
 
 func (s *UserService) registerHandler(w http.ResponseWriter, r *http.Request) {
@@ -219,13 +258,9 @@ func (s *UserService) registerHandler(w http.ResponseWriter, r *http.Request) {
             return nil
         }
 
-        // Verify company exists
-        var companyExists bool
-        err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM companies WHERE id = $1)", req.CompanyID).Scan(&companyExists)
+        // Verify company exists via company service
+        _, err = s.fetchCompanyData(r.Context(), req.CompanyID, r.Header.Get("Authorization"))
         if err != nil {
-            return err
-        }
-        if !companyExists {
             s.RespondWithError(w, http.StatusBadRequest, "INVALID_COMPANY", "Invalid company ID")
             return nil
         }
@@ -308,92 +343,6 @@ func (s *UserService) getUsersHandler(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func (s *UserService) getCompaniesHandler(w http.ResponseWriter, r *http.Request) {
-    err := s.ExecuteWithTimeout(10*time.Second, func(ctx context.Context) error {
-        query := `SELECT id, name, tax_id, address, phone, email 
-                  FROM companies 
-                  ORDER BY name`
-        
-        rows, err := s.DB.QueryContext(ctx, query)
-        if err != nil {
-            s.HandleDBError(w, err, "Error fetching companies")
-            return nil
-        }
-        defer rows.Close()
-        
-        var companies []Company
-        for rows.Next() {
-            var company Company
-            err := rows.Scan(&company.ID, &company.Name, &company.TaxID, &company.Address,
-                            &company.Phone, &company.Email)
-            if err != nil {
-                continue
-            }
-            companies = append(companies, company)
-        }
-        
-        s.RespondWithJSON(w, http.StatusOK, companies)
-        return nil
-    })
-
-    if err != nil {
-        s.RespondWithError(w, http.StatusInternalServerError, "FETCH_ERROR", "Error retrieving companies")
-    }
-}
-
-func (s *UserService) createCompanyHandler(w http.ResponseWriter, r *http.Request) {
-    var company Company
-    if err := json.NewDecoder(r.Body).Decode(&company); err != nil {
-        s.RespondWithError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request body")
-        return
-    }
-
-    validator := validation.New()
-    validator.Required("name", company.Name)
-    validator.MinLength("name", company.Name, 2)
-    validator.MaxLength("name", company.Name, 255)
-    validator.Required("tax_id", company.TaxID)
-    validator.IndonesianTaxID("tax_id", company.TaxID)
-    validator.Email("email", company.Email)
-    validator.IndonesianPhone("phone", company.Phone)
-
-    if !validator.IsValid() {
-        s.RespondValidationError(w, validator.Errors())
-        return
-    }
-
-    err := s.WithTransaction(r.Context(), func(tx *sql.Tx) error {
-        // Check if tax ID already exists
-        var exists bool
-        err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM companies WHERE tax_id = $1)", company.TaxID).Scan(&exists)
-        if err != nil {
-            return err
-        }
-        if exists {
-            s.RespondWithError(w, http.StatusConflict, "TAX_ID_EXISTS", "Company with this Tax ID already exists")
-            return nil
-        }
-
-        query := `INSERT INTO companies (name, tax_id, address, phone, email) 
-                  VALUES ($1, $2, $3, $4, $5) 
-                  RETURNING id`
-        
-        err = tx.QueryRow(query, company.Name, company.TaxID, company.Address,
-                         company.Phone, company.Email).Scan(&company.ID)
-        if err != nil {
-            s.HandleDBError(w, err, "Error creating company")
-            return nil
-        }
-
-        s.RespondWithJSON(w, http.StatusCreated, company)
-        return nil
-    })
-
-    if err != nil {
-        s.RespondWithError(w, http.StatusInternalServerError, "CREATE_ERROR", "Company creation failed")
-    }
-}
-
 func (s *UserService) getProfileHandler(w http.ResponseWriter, r *http.Request) {
     userID := s.GetUserIDFromRequest(r)
     if userID == 0 {
@@ -403,19 +352,14 @@ func (s *UserService) getProfileHandler(w http.ResponseWriter, r *http.Request) 
 
     err := s.ExecuteWithTimeout(10*time.Second, func(ctx context.Context) error {
         var user User
-        var company Company
         
-        query := `SELECT u.id, u.email, u.name, u.role, u.company_id, u.is_active, u.last_login, u.created_at,
-                         c.name, c.tax_id, c.address, c.phone, c.email
-                  FROM users u
-                  JOIN companies c ON u.company_id = c.id
-                  WHERE u.id = $1`
+        query := `SELECT id, email, name, role, company_id, is_active, last_login, created_at
+                  FROM users WHERE id = $1`
         
         var lastLogin sql.NullTime
         err := s.DB.QueryRowContext(ctx, query, userID).Scan(
             &user.ID, &user.Email, &user.Name, &user.Role, 
-            &user.CompanyID, &user.IsActive, &lastLogin, &user.CreatedAt,
-            &company.Name, &company.TaxID, &company.Address, &company.Phone, &company.Email)
+            &user.CompanyID, &user.IsActive, &lastLogin, &user.CreatedAt)
         
         if err == sql.ErrNoRows {
             s.RespondWithError(w, http.StatusNotFound, "USER_NOT_FOUND", "User profile not found")
@@ -430,7 +374,12 @@ func (s *UserService) getProfileHandler(w http.ResponseWriter, r *http.Request) 
             user.LastLogin = &lastLogin.Time
         }
         
-        company.ID = user.CompanyID
+        // Fetch company data from company service
+        company, err := s.fetchCompanyData(r.Context(), user.CompanyID, r.Header.Get("Authorization"))
+        if err != nil {
+            s.RespondWithError(w, http.StatusInternalServerError, "COMPANY_ERROR", "Error fetching company data")
+            return nil
+        }
         
         response := map[string]interface{}{
             "user":    user,
@@ -578,4 +527,11 @@ func (s *UserService) generateJWT(user User) (string, error) {
 
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
     return token.SignedString([]byte(s.config.JWT.Secret))
+}
+
+func getEnv(key, defaultValue string) string {
+    if value := os.Getenv(key); value != "" {
+        return value
+    }
+    return defaultValue
 }

@@ -1,3 +1,4 @@
+-- database/init-db.sql - CORRECTED VERSION WITH PROPER SERVICE SEPARATION
 -- Enhanced Database Initialization Script with Company Service Support
 
 -- Create all databases (including company_db)
@@ -10,20 +11,8 @@ CREATE DATABASE vendor_db;
 CREATE DATABASE inventory_db;
 CREATE DATABASE tax_db;
 
--- User Database Setup
+-- User Database Setup (COMPANIES TABLE REMOVED - MICROSERVICES COMPLIANCE)
 \c user_db;
-
-CREATE TABLE companies (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    tax_id VARCHAR(50) UNIQUE NOT NULL,
-    address TEXT,
-    phone VARCHAR(20),
-    email VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT check_tax_id_format CHECK (tax_id ~ '^\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}$')
-);
 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
@@ -31,7 +20,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     role VARCHAR(50) NOT NULL CHECK (role IN ('admin', 'manager', 'accountant', 'user')),
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    company_id INTEGER NOT NULL, -- Foreign key reference to company service (no FK constraint across services)
     is_active BOOLEAN DEFAULT TRUE,
     last_login TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -52,17 +41,14 @@ CREATE TABLE audit_log (
     user_agent TEXT
 );
 
--- Insert sample data
-INSERT INTO companies (name, tax_id, address, phone, email) VALUES 
-('PT Contoh Indonesia', '01.234.567.8-901.000', 'Jakarta, Indonesia', '+62-21-1234567', 'admin@contoh.co.id');
-
+-- Insert sample users (referencing company IDs from company service)
 -- Password: 'password123' (use bcrypt with cost 12 in production)
 INSERT INTO users (email, password_hash, name, role, company_id) VALUES 
 ('admin@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Administrator', 'admin', 1),
 ('manager@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Manager', 'manager', 1),
 ('accountant@contoh.co.id', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj1h4yOy.Z7C', 'Accountant', 'accountant', 1);
 
--- Company Database Setup (NEW)
+-- Company Database Setup (SINGLE SOURCE OF TRUTH FOR COMPANY DATA)
 \c company_db;
 
 CREATE TABLE companies (
@@ -400,7 +386,6 @@ CREATE INDEX idx_users_company_email ON users(company_id, email);
 CREATE INDEX idx_users_active ON users(is_active) WHERE is_active = true;
 CREATE INDEX idx_audit_log_table_record ON audit_log(table_name, record_id);
 CREATE INDEX idx_audit_log_timestamp ON audit_log(timestamp);
-CREATE INDEX idx_companies_tax_id ON companies(tax_id);
 
 \c company_db;
 CREATE INDEX idx_companies_tax_id ON companies(tax_id);
@@ -441,6 +426,7 @@ CREATE INDEX idx_tax_rates_company_active ON tax_rates(company_id, is_active) WH
 CREATE INDEX idx_tax_transactions_company_type ON tax_transactions(company_id, transaction_type);
 
 -- Create functions for automatic updated_at timestamps
+\c user_db;
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -467,32 +453,95 @@ $$ language 'plpgsql';
 
 -- Apply triggers to tables with updated_at columns
 \c user_db;
-CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER audit_companies AFTER INSERT OR UPDATE OR DELETE ON companies FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
 CREATE TRIGGER audit_users AFTER INSERT OR UPDATE OR DELETE ON users FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
 
 \c company_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_companies_updated_at BEFORE UPDATE ON companies FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_company_settings_updated_at BEFORE UPDATE ON company_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c account_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_accounts_updated_at BEFORE UPDATE ON chart_of_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c transaction_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE OR REPLACE FUNCTION audit_log_changes()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Note: This is a simplified audit function for transaction_db
+    -- In a real implementation, you might want to log to a central audit service
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_journal_entries_updated_at BEFORE UPDATE ON journal_entries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER audit_journal_entries AFTER INSERT OR UPDATE OR DELETE ON journal_entries FOR EACH ROW EXECUTE FUNCTION audit_log_changes();
 
 \c invoice_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_customers_updated_at BEFORE UPDATE ON customers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_invoices_updated_at BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c vendor_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_vendors_updated_at BEFORE UPDATE ON vendors FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_purchase_orders_updated_at BEFORE UPDATE ON purchase_orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c inventory_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 \c tax_db;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
 CREATE TRIGGER update_tax_rates_updated_at BEFORE UPDATE ON tax_rates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

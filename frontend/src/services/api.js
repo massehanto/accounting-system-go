@@ -1,4 +1,4 @@
-// frontend/src/services/api.js - ENHANCED VERSION
+// frontend/src/services/api.js - UPDATED FOR SERVICE SEPARATION
 import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
@@ -263,7 +263,7 @@ class ApiService {
         }
     }
 
-    // Enhanced API methods with better error handling
+    // UPDATED: Enhanced login method to handle new service separation
     async login(credentials) {
         try {
             const response = await this.api.post('/auth/login', credentials);
@@ -279,7 +279,76 @@ class ApiService {
         }
     }
 
-    // Enhanced transaction operations with validation
+    // UPDATED: User-related API calls (authentication service)
+    async getUsers() {
+        return this.get('/users');
+    }
+
+    async updateProfile(profileData) {
+        return this.put('/profile', profileData);
+    }
+
+    async getProfile() {
+        return this.get('/profile');
+    }
+
+    async refreshToken() {
+        return this.post('/auth/refresh');
+    }
+
+    // UPDATED: Company-related API calls (company service)
+    async getCompanies() {
+        return this.get('/companies');
+    }
+
+    async createCompany(company) {
+        return this.post('/companies', company);
+    }
+
+    async updateCompany(id, company) {
+        return this.put(`/companies/${id}`, company);
+    }
+
+    async getCompany(id) {
+        return this.get(`/companies/${id}`);
+    }
+
+    async getCompanySettings(companyId) {
+        return this.get(`/companies/${companyId}/settings`);
+    }
+
+    async updateCompanySettings(companyId, settings) {
+        return this.put(`/companies/${companyId}/settings`, settings);
+    }
+
+    // Account-related API calls
+    async getAccounts(companyId) {
+        return this.get('/accounts', { company_id: companyId, include_balance: true });
+    }
+
+    async createAccount(account) {
+        // Validate Indonesian account code format
+        if (account.account_code && !/^\d{4}$/.test(account.account_code)) {
+            throw new Error('Account code must be 4 digits for Indonesian accounting standards');
+        }
+        
+        return this.post('/accounts', account);
+    }
+
+    async updateAccount(id, account) {
+        return this.put(`/accounts/${id}`, account);
+    }
+
+    async getAccountBalance(id, asOf = null) {
+        const params = asOf ? { as_of: asOf } : {};
+        return this.get(`/accounts/${id}/balance`, params);
+    }
+
+    // Transaction-related API calls
+    async getTransactions(companyId, filters = {}) {
+        return this.get('/transactions', { company_id: companyId, ...filters });
+    }
+
     async createTransaction(transaction) {
         // Client-side validation for Indonesian compliance
         if (transaction.lines) {
@@ -304,17 +373,40 @@ class ApiService {
         return this.post('/transactions', transaction);
     }
 
-    // Enhanced account operations
-    async createAccount(account) {
-        // Validate Indonesian account code format
-        if (account.account_code && !/^\d{4}$/.test(account.account_code)) {
-            throw new Error('Account code must be 4 digits for Indonesian accounting standards');
-        }
-        
-        return this.post('/accounts', account);
+    async getTransaction(id) {
+        return this.get(`/transactions/${id}`);
     }
 
-    // Enhanced currency operations
+    async postTransaction(id) {
+        return this.post(`/transactions/${id}/post`);
+    }
+
+    async reverseTransaction(id, reason) {
+        return this.post(`/transactions/${id}/reverse`, { reason });
+    }
+
+    // Invoice-related API calls
+    async getInvoices(companyId) {
+        return this.get('/invoices', { company_id: companyId });
+    }
+
+    async createInvoice(invoice) {
+        return this.post('/invoices', invoice);
+    }
+
+    async sendInvoice(id) {
+        return this.post(`/invoices/${id}/send`);
+    }
+
+    async getCustomers(companyId) {
+        return this.get('/customers', { company_id: companyId });
+    }
+
+    async createCustomer(customer) {
+        return this.post('/customers', customer);
+    }
+
+    // Exchange rate operations
     async getExchangeRates() {
         try {
             const response = await this.get('/rates');
@@ -336,6 +428,10 @@ class ApiService {
             }
             throw error;
         }
+    }
+
+    async convertCurrency(amount, from, to) {
+        return this.post('/convert', { amount, from, to });
     }
 
     // Generic CRUD operations with enhanced error handling
@@ -397,6 +493,15 @@ class ApiService {
             return userStr ? JSON.parse(userStr) : null;
         } catch (error) {
             this.clearAuth();
+            return null;
+        }
+    }
+
+    getCurrentCompany() {
+        try {
+            const companyStr = localStorage.getItem('company');
+            return companyStr ? JSON.parse(companyStr) : null;
+        } catch (error) {
             return null;
         }
     }
